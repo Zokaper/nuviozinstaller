@@ -20,7 +20,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
- * Desktop's Tauri commands and events, for the shared installer UI (iosInstaller/ui) running in a WebView.
+ * Desktop's Tauri commands and events, for the shared installer UI (the repository's ui/) running in a WebView.
  * android-bridge.js turns `__TAURI__.core.invoke(cmd, args)` into {@link #invoke}; replies come back through
  * `__nuvioResolve` and events through `__nuvioEmit`, with the payloads desktop's app/src/main.rs sends.
  *
@@ -43,7 +43,11 @@ final class InstallerBridge {
     private final PairingStore account;
     private final PairingStore signing;
     private final Handler main = new Handler(Looper.getMainLooper());
+    /** Network work that isn't a USB operation (the self-update). */
+    private final java.util.concurrent.ExecutorService background = java.util.concurrent.Executors.newSingleThreadExecutor();
     private final List<String> errors = new ArrayList<>();
+    /** The newer installer check_update found, for apply_update. */
+    private JSONObject update;
 
     /** The last mode-7 status for the attached phone; cleared when it is unplugged. */
     private JSONObject phone;
@@ -81,9 +85,15 @@ final class InstallerBridge {
         });
         session.observe(this::progress);
         permission.resume();
+        UpdateReceiver.listener = message -> main.post(() -> {
+            try { emit("update-failed", new JSONObject().put("message", message)); } catch (JSONException ignored) { }
+        });
     }
 
-    void stop() { permission.stop(); }
+    void stop() {
+        permission.stop();
+        UpdateReceiver.listener = null;
+    }
 
     /** USB attach/detach, from the Activity's receiver. */
     void devicesChanged(UsbDevice detached) {
@@ -133,9 +143,9 @@ final class InstallerBridge {
                 resolve(id, null);
                 return;
             case "diagnostics": resolve(id, diagnostics()); return;
-            case "place_nuvio_pairing":
-                reject(id, "Not on Android yet: go back and use Repair, which adds it again.");
-                return;
+            case "check_update": checkUpdate(id); return;
+            case "apply_update": applyUpdate(id); return;
+            case "place_nuvio_pairing": placeAgain(id, args.optBoolean("debug")); return;
             default: reject(id, "Not available on Android: " + command);
         }
     }
@@ -231,6 +241,23 @@ final class InstallerBridge {
                 else { note("reveal", result); reject(id, message(result)); }
             } catch (JSONException error) { reject(id, "report unreadable"); }
         }), () -> reject(id, "The installer is busy with the iPhone. Try again in a moment."));
+    }
+
+    /** "Add it again" on the "Open Nuvio Z" step: Nuvio Z's connection file only (native mode 9). */
+    private void placeAgain(int id, boolean debug) {
+        UsbDevice device = apple();
+        if (device == null || !usb.hasPermission(device)) { reject(id, "Plug the iPhone into this phone first."); return; }
+        InstallRequest request = InstallRequest.forHandoff(context, debug);
+        whenIdle(() -> {
+            boolean started = session.start(device, 9, request, report -> {
+                try {
+                    JSONObject result = new JSONObject(report);
+                    if (result.optBoolean("ok")) { phone = null; resolve(id, new JSONObject()); }
+                    else { note("add again", result); reject(id, message(result)); }
+                } catch (JSONException error) { reject(id, "report unreadable"); }
+            });
+            if (!started) reject(id, "The installer is busy with the iPhone. Try again in a moment.");
+        }, () -> reject(id, "The installer is busy with the iPhone. Try again in a moment."));
     }
 
     /** Runs `start` once no USB operation is running (a status read takes a second or two), or gives up. */
@@ -412,6 +439,44 @@ final class InstallerBridge {
         if (stage.startsWith("download")) return "download";
         if (stage.startsWith("handoff")) return "pairing";
         return "sign";
+    }
+
+    // ---------------------------------------------------------------------------------------------- self-update
+
+    private String installedVersion() {
+        try { return context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName; }
+        catch (Exception error) { return ""; }
+    }
+
+    private void checkUpdate(int id) {
+        // A development build (com.nuvio.z.installer.dev) is a different app from the released one: never "update" it.
+        if (context.getPackageName().endsWith(".dev")) { resolve(id, null); return; }
+        String current = installedVersion();
+        background.execute(() -> {
+            try {
+                JSONObject found = InstallerUpdater.check(current);
+                main.post(() -> { update = found; resolve(id, found); });
+            } catch (Exception error) {
+                main.post(() -> reject(id, "update: " + error.getClass().getSimpleName() + ": " + error.getMessage()));
+            }
+        });
+    }
+
+    private void applyUpdate(int id) {
+        JSONObject found = update;
+        if (found == null) { reject(id, "no update is waiting"); return; }
+        background.execute(() -> {
+            try {
+                InstallerUpdater.install(context, found, fraction -> main.post(() -> emit("update-progress", (double) fraction)));
+                main.post(() -> resolve(id, null));
+            } catch (Exception error) {
+                String why = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+                main.post(() -> {
+                    errors.add((System.currentTimeMillis() / 1000) + " update: " + why);
+                    reject(id, why);
+                });
+            }
+        });
     }
 
     // ---------------------------------------------------------------------------------------------- reporting

@@ -216,7 +216,11 @@ impl Request {
         let object = env
             .new_global_ref(storage)
             .map_err(|_| ("install_input", "Signing store unavailable"))?;
-        if email.trim().is_empty() || secret.is_empty() {
+        let handoff_only = env
+            .get_field(&object, "handoffOnly", "Z")
+            .and_then(|v| v.z())
+            .map_err(|_| ("install_input", "Request kind unavailable"))?;
+        if !handoff_only && (email.trim().is_empty() || secret.is_empty()) {
             return Err((
                 "install_input",
                 "Enter account and password directly in the Android app",
@@ -670,8 +674,46 @@ pub async fn perform(
         "self_refresh_handoff",
         "Building the existing Nuvio Z self-refresh pairing handoff",
     );
+    place_pairing(&provider, &request.storage, bundle.clone()).await?;
+    report.pairing_handoff = true;
+    report.remote_pairing_handoff = true;
+    let ha = idevice::house_arrest::HouseArrestClient::connect(&provider)
+        .await
+        .map_err(|e| safe_failure("handoff", e))?;
+    let mut afc = ha
+        .vend_documents(bundle)
+        .await
+        .map_err(|e| safe_failure("handoff", e))?;
+    let hash = hex(&Sha256::digest(request.email.as_bytes()));
+    let key = request
+        .storage
+        .retrieve_data(&format!("{hash}/key"))
+        .map_err(|e| safe_failure("handoff", e))?
+        .ok_or(("handoff", "Signing key missing from encrypted store"))?;
+    let mut key_file = plist::Dictionary::new();
+    key_file.insert("emailHash".into(), hash.into());
+    key_file.insert("key".into(), plist::Value::Data(key));
+    let mut bytes = Vec::new();
+    plist::Value::Dictionary(key_file)
+        .to_writer_xml(&mut bytes)
+        .map_err(|e| safe_failure("handoff", e))?;
+    put(&mut afc, "NuvioZSigningKey.plist", &bytes).await?;
+    bytes.zeroize();
+    report.signing_key_handoff = true;
+    status("installed", format!("{name} installed with its connection file and signing key"));
+    Ok(())
+}
+
+/// Nuvio Z's connection file: the saved Lockdown record merged with a remote-pairing identity (made once and kept
+/// in the encrypted signing store), with Wi-Fi debugging on, written into the app's Documents and read back. The
+/// same file desktop places (core/src/pairing.rs) and the iPhone's own refresh reads (core/src/ondevice.rs).
+async fn place_pairing(
+    provider: &crate::pairing::IdentifiedProvider<'_>,
+    storage: &SigningStorage,
+    bundle: String,
+) -> Result<(), Failure> {
     let mut lockdown = crate::paired_tls::start(
-        idevice::lockdown::LockdownClient::connect(&provider)
+        idevice::lockdown::LockdownClient::connect(provider)
             .await
             .map_err(|e| safe_failure("handoff", e))?,
         &provider.record,
@@ -688,8 +730,7 @@ pub async fn perform(
         .map_err(|e| safe_failure("handoff", e))?;
     let host = "nuvioz-android";
     let rp_key = format!("rp:{}", hex(&Sha256::digest(provider.udid.as_bytes())));
-    let mut rp = match request
-        .storage
+    let mut rp = match storage
         .retrieve_data(&rp_key)
         .map_err(|e| safe_failure("handoff", e))?
     {
@@ -697,7 +738,7 @@ pub async fn perform(
             .map_err(|e| safe_failure("handoff", e))?,
         None => idevice::remote_pairing::RpPairingFile::generate(host),
     };
-    let service = idevice::remote_pairing::RemotePairingLockdownService::connect(&provider)
+    let service = idevice::remote_pairing::RemotePairingLockdownService::connect(provider)
         .await
         .map_err(|e| safe_failure("handoff", e))?;
     let mut remote = service
@@ -707,8 +748,7 @@ pub async fn perform(
         .connect(&mut rp, async || "000000".to_string())
         .await
         .map_err(|e| safe_failure("handoff", e))?;
-    request
-        .storage
+    storage
         .store_data(&rp_key, &rp.to_bytes())
         .map_err(|e| safe_failure("handoff", e))?;
     let mut record = plist::Value::from_reader(std::io::Cursor::new(
@@ -732,7 +772,7 @@ pub async fn perform(
     plist::Value::Dictionary(record)
         .to_writer_xml(&mut pairing)
         .map_err(|e| safe_failure("handoff", e))?;
-    let ha = idevice::house_arrest::HouseArrestClient::connect(&provider)
+    let ha = idevice::house_arrest::HouseArrestClient::connect(provider)
         .await
         .map_err(|e| safe_failure("handoff", e))?;
     let mut afc = ha
@@ -741,26 +781,38 @@ pub async fn perform(
         .map_err(|e| safe_failure("handoff", e))?;
     put(&mut afc, "NuvioZPairing.plist", &pairing).await?;
     pairing.zeroize();
-    report.pairing_handoff = true;
-    report.remote_pairing_handoff = true;
-    let hash = hex(&Sha256::digest(request.email.as_bytes()));
-    let key = request
-        .storage
-        .retrieve_data(&format!("{hash}/key"))
-        .map_err(|e| safe_failure("handoff", e))?
-        .ok_or(("handoff", "Signing key missing from encrypted store"))?;
-    let mut key_file = plist::Dictionary::new();
-    key_file.insert("emailHash".into(), hash.into());
-    key_file.insert("key".into(), plist::Value::Data(key));
-    let mut bytes = Vec::new();
-    plist::Value::Dictionary(key_file)
-        .to_writer_xml(&mut bytes)
-        .map_err(|e| safe_failure("handoff", e))?;
-    put(&mut afc, "NuvioZSigningKey.plist", &bytes).await?;
-    bytes.zeroize();
-    report.signing_key_handoff = true;
-    status("installed", format!("{name} installed with its connection file and signing key"));
     Ok(())
+}
+
+/// "Add it again" on the "Open Nuvio Z" step: places the connection file again for the installed Nuvio Z (the
+/// chosen build when both are installed), without signing anything.
+pub async fn place_again(
+    raw: &dyn IdeviceProvider,
+    pair_store: &mut dyn Store,
+    request: Request,
+) -> Result<(), Failure> {
+    let provider = crate::pairing::saved_provider(raw, pair_store).await?;
+    let apps = tokio::time::timeout(Duration::from_secs(20), async {
+        let mut proxy = idevice::installation_proxy::InstallationProxyClient::connect(&provider).await?;
+        proxy.get_apps(Some("User"), None).await
+    })
+    .await
+    .map_err(|_| ("handoff", "The iPhone didn't list its apps in time"))?
+    .map_err(|e| safe_failure("handoff", e))?;
+    let is_debug = |id: &String| id.to_lowercase().starts_with(DEBUG_BUNDLE);
+    let is_stable = |id: &String| {
+        let id = id.to_lowercase();
+        id == STABLE_BUNDLE || (id.starts_with(&format!("{STABLE_BUNDLE}.")) && !id.starts_with(DEBUG_BUNDLE))
+    };
+    let preferred: Vec<&String> = apps.keys().filter(|id| if request.debug { is_debug(id) } else { is_stable(id) }).collect();
+    let bundle = preferred
+        .first()
+        .copied()
+        .or_else(|| apps.keys().find(|id| is_debug(id) || is_stable(id)))
+        .ok_or(("handoff", "Nuvio Z isn't on this iPhone"))?
+        .clone();
+    status("self_refresh_handoff", "Adding Nuvio Z's connection file again");
+    place_pairing(&provider, &request.storage, bundle).await
 }
 
 async fn put(afc: &mut idevice::afc::AfcClient, name: &str, bytes: &[u8]) -> Result<(), Failure> {

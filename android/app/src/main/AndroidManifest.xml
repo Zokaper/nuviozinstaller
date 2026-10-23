@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
-    <!-- Experimental signing/install proof: Apple, anisette and pinned official IPA download. -->
+    <!-- Apple sign-in, anisette and the hosted Nuvio Z download. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The installer updates itself (InstallerUpdater); Android asks the person to confirm each update. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application android:allowBackup="false" android:label="Nuvio Z Installer"
+        android:icon="@mipmap/ic_launcher"
         android:enableOnBackInvokedCallback="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <receiver android:name=".UsbPermissionReceiver" android:exported="false" />
-        <!-- The installer: desktop's screens (iosInstaller/ui) in a WebView. -->
+        <receiver android:name=".UpdateReceiver" android:exported="false" />
+        <!-- The installer: desktop's screens (../ui) in a WebView. -->
         <activity android:name=".InstallerActivity" android:exported="true"
             android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
@@ -21,7 +25,7 @@
             <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/apple_usb_devices" />
         </activity>
-        <!-- The proof's diagnostic screen, kept for adb: am start -n com.nuvio.app.z.usbprobe/com.nuvio.usbprobe.UsbProbeActivity -->
+        <!-- The proof's diagnostic screen, kept for adb: am start -n com.nuvio.z.installer/com.nuvio.usbprobe.UsbProbeActivity -->
         <activity android:name=".UsbProbeActivity" android:exported="false"
             android:theme="@android:style/Theme.Material.Light.NoActionBar"
             android:configChanges="orientation|screenSize|keyboardHidden" />

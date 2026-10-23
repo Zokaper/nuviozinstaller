@@ -20,6 +20,10 @@ public final class NativeUsbProbe {
     static String install(int fd, long attempt, PairingStore store, InstallRequest request) {
         return execute(fd, attempt, 6, store, request);
     }
+    /** Mode 6 signs and installs; mode 9 only places Nuvio Z's connection file again. */
+    static String install(int fd, long attempt, int mode, PairingStore store, InstallRequest request) {
+        return execute(fd, attempt, mode, store, request);
+    }
     static native boolean answerChallenge(String answer);
     static native String certificateChoices();
     static native void cancel(long attempt);

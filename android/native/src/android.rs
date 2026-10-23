@@ -230,6 +230,13 @@ async fn probe(
                     .await
                     .map_err(|(stage, message)| (stage, message.to_string()));
             }
+            // 9: "Add it again", Nuvio Z's connection file only, through the saved record.
+            if mode == 9 {
+                let request = install.ok_or(("install_input", "Hand-off request missing".to_string()))?;
+                return crate::installer::place_again(&provider, store, request)
+                    .await
+                    .map_err(|(stage, message)| (stage, message.to_string()));
+            }
             let result = crate::pairing::authenticate(
                 &provider,
                 store,
@@ -338,7 +345,7 @@ fn run(
                 tokio::select! {
                     biased;
                     _ = CANCEL.wait(attempt) => Err("probe_cancelled"),
-                    result = timeout(Duration::from_secs(if mode == 6 { 1200 } else if mode == 7 || mode == 8 { 60 } else if mode >= 3 { 180 } else { 45 }), probe(fd, mode, &mut report, store, install)) =>
+                    result = timeout(Duration::from_secs(if mode == 6 { 1200 } else if mode == 7 || mode == 8 || mode == 9 { 90 } else if mode >= 3 { 180 } else { 45 }), probe(fd, mode, &mut report, store, install)) =>
                         result.map_err(|_| "deadline"),
                 }
             });
@@ -350,7 +357,7 @@ fn run(
                         "complete",
                         if mode == 6 {
                             "Signed Nuvio Z installed with self-refresh handoff"
-                        } else if mode == 7 || mode == 8 {
+                        } else if mode == 7 || mode == 8 || mode == 9 {
                             "Phone status read through the saved record"
                         } else if mode >= 3 {
                             "Authenticated information read succeeded; no Apple authentication, signing or installation"

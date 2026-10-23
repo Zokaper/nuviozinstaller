@@ -7,7 +7,7 @@ use std::time::Duration;
 use nuvioz_installer_core::account::{self, SignInError, SignInErrorKind, Signer, TwoFactorPrompt, TwoFactorReply};
 use nuvioz_installer_core::nuvio::{self, Build};
 use nuvioz_installer_core::sidestore::{self, Channel, InstallError, Stage};
-use nuvioz_installer_core::{anisette, credentials, device, drivers, pairing, paths, selfsign, storage};
+use nuvioz_installer_core::{anisette, credentials, device, drivers, pairing, paths, selfsign, storage, update};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{mpsc, Mutex};
@@ -24,6 +24,8 @@ struct Session {
     certificates: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Option<Vec<String>>>>>,
     /// What went wrong this session, for Help › Copy report: one line each, never a password or full email.
     errors: std::sync::Mutex<Vec<String>>,
+    /// The newer installer `check_update` found, for `apply_update`.
+    update: std::sync::Mutex<Option<update::Available>>,
 }
 
 impl Session {
@@ -243,6 +245,29 @@ fn local_nuvio() -> Option<serde_json::Value> {
     }))
 }
 
+/// The newest installer, when there is a newer one than this (the welcome screen offers it).
+#[tauri::command]
+async fn check_update(session: State<'_, Session>) -> Result<Option<update::Available>, String> {
+    let result = update::check(env!("CARGO_PKG_VERSION")).await;
+    *session.update.lock().unwrap() = result.as_ref().ok().cloned().flatten();
+    result
+}
+
+/// Downloads the update `check_update` found, puts it in place of this app and restarts into it.
+#[tauri::command]
+async fn apply_update(app: AppHandle, session: State<'_, Session>) -> Result<(), String> {
+    let found = session.update.lock().unwrap().clone().ok_or("no update is waiting")?;
+    let result = update::apply(&found, |fraction| {
+        let _ = app.emit("update-progress", fraction);
+    })
+    .await;
+    if let Err(e) = &result {
+        session.errors.lock().unwrap().push(format!("update: {e}"));
+    }
+    result?;
+    app.restart()
+}
+
 /// Help › Reset sign-in data: a fresh anisette identity on the next sign-in (the fix for Apple's -22410).
 /// The remembered account and the signing key stay.
 #[tauri::command]
@@ -281,6 +306,7 @@ async fn diagnostics(session: State<'_, Session>) -> Result<serde_json::Value, S
 
 fn main() {
     nuvioz_installer_core::init();
+    update::clean_up();
     tauri::Builder::default()
         .manage(Session::default())
         .setup(|app| {
@@ -313,6 +339,8 @@ fn main() {
             install_nuvio,
             local_nuvio,
             reset_sign_in,
+            check_update,
+            apply_update,
             diagnostics
         ])
         .run(tauri::generate_context!())

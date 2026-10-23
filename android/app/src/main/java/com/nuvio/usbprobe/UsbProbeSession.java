@@ -121,7 +121,7 @@ final class UsbProbeSession {
                         main.post(() -> note("attempt=" + id + " android_open_success"));
                         failedAt = "native_probe";
                         PairingStore pairStore = mode >= 3 ? new PairingStore(context) : null;
-                        result = mode == 6 ? NativeUsbProbe.install(connection.getFileDescriptor(), id, pairStore, install)
+                        result = mode == 6 || mode == 9 ? NativeUsbProbe.install(connection.getFileDescriptor(), id, mode, pairStore, install)
                                 : NativeUsbProbe.run(connection.getFileDescriptor(), id, mode, pairStore);
                     } finally {
                         // Never close this FD underneath JNI. Rust closes only its own duplicate.

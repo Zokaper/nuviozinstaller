@@ -14,6 +14,7 @@ pub mod paths;
 pub mod selfsign;
 pub mod sidestore;
 pub mod storage;
+pub mod update;
 
 /// Call once at start-up, before any network or device call.
 pub fn init() {

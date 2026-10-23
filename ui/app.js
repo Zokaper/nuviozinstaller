@@ -30,6 +30,8 @@ if (params.get("sidestore")) ctx.target = "sidestore";
 if (params.get("needsdriver")) ctx.device = { iphoneNeedsDriver: true };
 if (params.get("signingin")) Object.assign(ctx, { signingIn: true });
 if (params.get("local")) ctx.localIpa = { file: "NuvioZ-Debug-test.ipa", debug: true };
+// `?update=1` an installer update on the welcome screen, `?update=important` one Apple's signing changes need.
+if (params.get("update")) ctx.update = { version: "3.2.0", important: params.get("update") === "important" };
 // `?repair=1` the Repair path. `?g=4` opens a walkthrough (the daily refresh) at its fifth step.
 if (params.get("repair")) ctx.mode = "repair";
 ctx.guideAt = Number(params.get("g")) || 0;
@@ -285,6 +287,7 @@ async function act(action, step, index) {
       ctx.mode = "install";
       return render();
     case "automationAgain": return goTo("automation");
+    case "dismissUpdate": ctx.updateDismissed = true; flash = null; return render();
     case "copyReport":
       if (!ctx.live) return;
       ctx.helpNote = { kind: "work", text: "Putting the report together…" };
@@ -374,6 +377,21 @@ async function act(action, step, index) {
         flash = { kind: "ok", text: "Done. Close Nuvio Z fully and open it again." };
         return render();
       } catch (e) { return fail(`Couldn’t add it: ${e}`); }
+    case "applyUpdate":
+      ctx.updating = 0;
+      flash = null;
+      render();
+      try {
+        // Desktop swaps itself and restarts inside this call; Android hands the APK to Android, which asks.
+        await invoke("apply_update");
+        ctx.updating = null;
+        ctx.updateDismissed = true;
+        flash = { kind: "ok", text: "Tap Update when Android asks.", sub: "The installer closes to update. Open it again afterwards." };
+      } catch (e) {
+        ctx.updating = null;
+        flash = { kind: "bad", text: "Couldn’t update the installer.", sub: String(e) };
+      }
+      return render();
     // Android: ask again for USB access, or send the iPhone a new Trust request.
     case "requestUsb":
       try { await invoke("request_usb"); } catch (e) { return fail(String(e)); }
@@ -421,6 +439,15 @@ if (ctx.live) {
     render();
   });
   tauri.event.listen("certificates", (e) => { ctx.certificates = e.payload; render(); });
+  // The installer's own update: offered on the welcome screen, so an old copy never starts signing.
+  invoke("check_update").then((found) => { ctx.update = found; if (current === "welcome") render(); }).catch(() => {});
+  tauri.event.listen("update-progress", (e) => { ctx.updating = e.payload; if (current === "welcome") render(); });
+  tauri.event.listen("update-failed", (e) => {
+    ctx.updating = null;
+    ctx.updateDismissed = false;
+    flash = { kind: "bad", text: e.payload?.message || "The update didn’t install." };
+    render();
+  });
   let lastPaint = 0;
   tauri.event.listen("install-progress", (e) => {
     ctx.install = e.payload;

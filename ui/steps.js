@@ -42,6 +42,13 @@ function buildSteps(ctx) {
   const android = ctx.platform === "android";
   const HERE = android ? "this phone" : "this computer";
   const CLICK = android ? "Tap" : "Click";
+  // The installer's own update, offered on the welcome screen before anything is signed (core/src/update.rs,
+  // InstallerUpdater.java). Important: Apple changed signing, and this copy may fail until it updates.
+  const update = ctx.update && !ctx.updateDismissed ? ctx.update : null;
+  const updateStatus = !update ? null
+    : ctx.updating != null ? { kind: "work", text: `Updating the installer… ${Math.round(ctx.updating * 100)}%` }
+    : update.important ? { kind: "warn", text: "Update the installer before you start.", sub: `Apple changed how apps are signed. Version ${update.version} keeps up with it; this one may fail.` }
+    : { kind: "ok", text: `A newer installer is ready: ${update.version}.`, sub: "Updating takes a few seconds." };
   const installText = { download: `Getting ${target} ready…`, sign: `Signing and sending ${target}… ${Math.round(install.fraction * 100)}%`, pairing: `Adding ${target}’s connection file…` }[install.stage];
 
   const all = [
@@ -61,9 +68,12 @@ function buildSteps(ctx) {
       { art: Art.glyph("cable"), cap: "A cable that carries data", sub: "The one that came with the iPhone works" },
       { art: Art.glyph("userRound"), cap: "Your Apple Account", sub: "A free one is fine. Not a child or work account" },
     ],
-    status: ctx.localIpa ? { kind: "ok", text: `Installs the ${ctx.localIpa.debug ? "Nuvio Z Debug" : "Nuvio Z"} test build next to this installer.`, sub: ctx.localIpa.file } : null,
-    buttons: direct ? [] : [{ label: "Let’s go" }],
-    links: [{ label: direct ? "Install with SideStore instead" : "Install Nuvio Z directly instead", action: "toggleTarget" }],
+    status: updateStatus || (ctx.localIpa ? { kind: "ok", text: `Installs the ${ctx.localIpa.debug ? "Nuvio Z Debug" : "Nuvio Z"} test build next to this installer.`, sub: ctx.localIpa.file } : null),
+    buttons: update && ctx.updating == null ? [{ label: "Update the installer", action: "applyUpdate" }] : direct ? [] : [{ label: "Let’s go" }],
+    links: [
+      ...(update && ctx.updating == null ? [{ label: update.important ? "Continue anyway" : "Not now", action: "dismissUpdate" }] : []),
+      { label: direct ? "Install with SideStore instead" : "Install Nuvio Z directly instead", action: "toggleTarget" },
+    ],
   },
   {
     id: "drivers",
@@ -423,9 +433,9 @@ function forAndroid(all, ctx) {
     ],
   };
   const over = {
-    welcome: () => ({
+    welcome: (s) => ({
       lead: "You’ll need the iPhone, a cable that connects it to this phone, and your Apple Account. Every step shows exactly what to tap.",
-      links: [],
+      links: s.links.filter((l) => l.action !== "toggleTarget"),
     }),
     connect: () => ({
       title: "Plug your iPhone into this phone",
