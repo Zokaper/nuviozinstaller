@@ -1,0 +1,76 @@
+name: Android
+
+# The Android installer: native core tests on the host, then the release APK, signed with the installer's own key
+# (secrets NUVIOZ_ANDROID_KEYSTORE_BASE64, NUVIOZ_ANDROID_KEYSTORE_PASSWORD, NUVIOZ_ANDROID_KEY_ALIAS,
+# NUVIOZ_ANDROID_KEY_PASSWORD). Every release must carry that same key, or the self-update can't install it.
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'ui/**'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Build the Android installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: android/native -> build/target
+      - name: NDK and Rust target
+        run: |
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install "ndk;28.2.13676358" > /dev/null
+          rustup target add aarch64-linux-android
+      - name: Native core tests
+        working-directory: android/native
+        run: cargo test --locked -p nuvioz-usb-probe
+      - name: Signing key
+        env:
+          KEYSTORE: ${{ secrets.NUVIOZ_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          [ -n "${KEYSTORE}" ] || { echo "::error::NUVIOZ_ANDROID_KEYSTORE_BASE64 is not set"; exit 1; }
+          echo "${KEYSTORE}" | base64 -d > "${RUNNER_TEMP}/release.jks"
+          echo "NUVIOZ_ANDROID_KEYSTORE=${RUNNER_TEMP}/release.jks" >> "$GITHUB_ENV"
+      - name: Build and test
+        working-directory: android
+        env:
+          NUVIOZ_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.NUVIOZ_ANDROID_KEYSTORE_PASSWORD }}
+          NUVIOZ_ANDROID_KEY_ALIAS: ${{ secrets.NUVIOZ_ANDROID_KEY_ALIAS }}
+          NUVIOZ_ANDROID_KEY_PASSWORD: ${{ secrets.NUVIOZ_ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-configuration-cache assembleRelease testDebugUnitTest lintRelease --console=plain
+      - name: Verify
+        run: |
+          set -euo pipefail
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          tools=$(ls -d "${ANDROID_HOME}"/build-tools/* | sort -V | tail -1)
+          "${tools}/apksigner" verify --print-certs "${apk}" | tee "${RUNNER_TEMP}/signer.txt"
+          # The installer's own release key; anything else could never update the copies people have.
+          grep -qi "75a9088dfd3785f588239dcfb2733d7faf88923b3a902e0e2bca1975ca5024e7" "${RUNNER_TEMP}/signer.txt"
+          "${tools}/zipalign" -c -P 16 4 "${apk}"
+          cp "${apk}" Nuvio-Z-Installer-Android.apk
+          sha256sum Nuvio-Z-Installer-Android.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-android
+          path: Nuvio-Z-Installer-Android.apk
+          if-no-files-found: error
+          retention-days: 14

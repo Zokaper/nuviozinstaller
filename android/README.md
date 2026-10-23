@@ -1,3 +1,10 @@
+# Nuvio Z Installer for Android
+
+The Android installer: desktop's screens (`../ui`) in a WebView (`InstallerActivity`, `InstallerBridge`), over the
+native core in `native/`. Released as `com.nuvio.z.installer`; see the repository README for building. Everything
+below is the history of the USB experiment it grew out of (package `com.nuvio.app.z.usbprobe`), kept for its
+protocol, TLS and device findings.
+
 # Android → iPhone installer experiment
 
 An opt-in **debug-only** Android application, `com.nuvio.app.z.usbprobe`, built from the Nuvio Z

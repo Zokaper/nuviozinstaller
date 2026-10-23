@@ -17,7 +17,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 /**
- * Nuvio Z Installer for Android: desktop's installer screens (iosInstaller/ui, copied into the APK's assets by
+ * Nuvio Z Installer for Android: desktop's installer screens (the repository's ui/, copied into the APK's assets by
  * Gradle) in a WebView, driven through {@link InstallerBridge}. This phone is the USB host for the iPhone.
  */
 public final class InstallerActivity extends Activity {

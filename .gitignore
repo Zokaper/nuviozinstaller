@@ -1,2 +1,10 @@
 target/
 app/gen/
+# Android build output, local SDK path and the native library build
+android/.gradle/
+android/**/build/
+android/native/target/
+android/local.properties
+# Signing keys never go in git (the release key lives in a GitHub secret and the maintainer's backup)
+*.jks
+*.keystore

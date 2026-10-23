@@ -2,7 +2,7 @@
 
 You are the gate in `.github/workflows/ios-installer-auto.yml`. A scheduled job found a newer version of a
 crate the installer signs and installs iPhone apps with, and has already bumped the pin in
-`iosInstaller/Cargo.toml` and updated `iosInstaller/Cargo.lock`. Your job is to decide whether this update
+`Cargo.toml` and updated `Cargo.lock`. Your job is to decide whether this update
 can ship to people automatically, and to make the small code changes it needs if any.
 
 These crates handle people's Apple Account passwords, signing certificates, private keys and a pairing record
@@ -41,7 +41,7 @@ dependency bumps of well-known crates are fine.
 
 The workflow found that iloader (`nab138/iloader`, by the author of `isideload`) changed its anisette server
 list in its latest release, and has already copied that list into `ANISETTE_SERVERS` in
-`iosInstaller/core/src/account.rs` (first one also as `DEFAULT_SERVER` in `core/src/anisette.rs`).
+`core/src/account.rs` (first one also as `DEFAULT_SERVER` in `core/src/anisette.rs`).
 `servers.json` has our old list, iloader's new list, the release tag and its notes. An anisette server sees the
 device-identity requests made during sign-in, not the password, but a hostile one could still disrupt sign-in.
 
@@ -59,13 +59,13 @@ Set `signing_behaviour_changed` to true for a server change: Nuvio Z on the phon
 If the "before" logs show compile errors or test failures caused by an API change upstream, fix **our** code
 so it builds and the tests pass:
 
-- You may edit only files under `iosInstaller/core/`, `iosInstaller/ffi/` and `iosInstaller/app/src/`.
+- You may edit only files under `core/`, `ffi/` and `app/src/`.
   Never edit tests to make them pass by weakening them, never touch `.github/`, `composeApp/`, `iosApp/`, the
   pins, or anything else.
 - Keep changes minimal and mechanical (a renamed function, a new argument, a moved type). If the fix needs a
   design decision, or changes what we send to Apple or the phone, stop and hold instead.
 - After editing, run `cargo test -p nuvioz-installer-core` and `cargo check -p nuvioz-signer` from
-  `iosInstaller/` until both pass. If you can't get there in a reasonable number of tries, hold.
+  the repository root until both pass. If you can't get there in a reasonable number of tries, hold.
 
 You can't build the Windows app or the iPhone library here; later jobs do that, so don't try.
 

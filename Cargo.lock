@@ -3129,7 +3129,7 @@ dependencies = [
 
 [[package]]
 name = "nuvioz-installer-core"
-version = "3.0.0-alpha.0"
+version = "3.1.0-alpha.1"
 dependencies = [
  "hex",
  "idevice",
@@ -3150,7 +3150,7 @@ dependencies = [
 
 [[package]]
 name = "nuvioz-ios-installer"
-version = "3.0.0-alpha.0"
+version = "3.1.0-alpha.1"
 dependencies = [
  "nuvioz-installer-core",
  "serde",
@@ -3162,7 +3162,7 @@ dependencies = [
 
 [[package]]
 name = "nuvioz-signer"
-version = "3.0.0-alpha.0"
+version = "3.1.0-alpha.1"
 dependencies = [
  "nuvioz-installer-core",
  "serde_json",

@@ -17,7 +17,7 @@ A version is adopted only once it has been on crates.io for the cooldown (a brok
 usually yanked within days) and is not yanked. Pins are exact ("=0.4.6"), so nothing moves without this.
 `--simulate isideload=0.4.5` pretends the pin is 0.4.5: a dry run that exercises the review against the last
 real upgrade without changing anything.
-Standard library only; run from iosInstaller/.
+Standard library only; run from the repository root.
 """
 import argparse
 import datetime as dt

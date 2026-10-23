@@ -1,0 +1,164 @@
+name: Release
+
+# Builds the installer for Windows, universal macOS and Android, then publishes from main: release v<version> with
+# all three, marked latest, so https://github.com/Zokaper/nuviozinstaller/releases/latest/download/<file> always
+# serves the newest. The installer's own self-update reads the same release (core/src/update.rs).
+# Run by hand, or called by auto-release.yml after a reviewed signing-crate update.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish (main only). Off builds and uploads the files as artifacts.'
+        type: boolean
+        default: false
+      signing_changed:
+        description: 'Signing changed: installers older than this one may fail with Apple (marks the update Important).'
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Commit or branch to build.'
+        type: string
+        required: true
+      publish:
+        type: boolean
+        default: true
+      signing_changed:
+        type: boolean
+        default: false
+      notes:
+        description: 'Extra release notes (markdown).'
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build for Windows
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          version=$(grep -m1 -E '^version = "' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Installer ${version} at $(git rev-parse --short HEAD)"
+
+      - name: Core tests
+        run: cargo test --locked -p nuvioz-installer-core
+
+      - name: Build the installer
+        run: cargo build --locked --release -p nuvioz-ios-installer
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dir = New-Item -ItemType Directory -Force package
+          Copy-Item target/release/nuvioz-ios-installer.exe (Join-Path $dir 'Nuvio Z iOS Installer.exe')
+          Compress-Archive -Path (Join-Path $dir '*') -DestinationPath Nuvio-Z-Installer-Windows-x64.zip
+          Get-Item Nuvio-Z-Installer-Windows-x64.zip | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-windows
+          path: Nuvio-Z-Installer-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    name: Build for Mac
+    uses: ./.github/workflows/macos.yml
+    with:
+      ref: ${{ inputs.ref || github.sha }}
+
+  android:
+    name: Build for Android
+    uses: ./.github/workflows/android.yml
+    with:
+      ref: ${{ inputs.ref || github.sha }}
+    secrets: inherit
+
+  publish:
+    name: Publish
+    needs: [build, macos, android]
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+      SHA: ${{ needs.build.outputs.sha }}
+      NOTES: ${{ inputs.notes }}
+      SIGNING_CHANGED: ${{ inputs.signing_changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # What people download: only what is on main may reach it.
+      - name: Only from main
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "${SHA}" origin/main; then
+            echo "::error::${SHA} is not on main; publishing is for main only."
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: installer-windows
+          path: assets
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: installer-macos
+          path: assets
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: installer-android
+          path: assets
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::error::${tag} already exists; bump the version in Cargo.toml and app/tauri.conf.json."
+            exit 1
+          fi
+          cd assets
+          unzip -l Nuvio-Z-Installer-Windows-x64.zip | grep -q 'Nuvio Z iOS Installer.exe'
+          unzip -l Nuvio-Z-Installer-macOS.zip | grep -q 'Nuvio Z iOS Installer.app/Contents/Info.plist'
+          unzip -l Nuvio-Z-Installer-Android.apk | grep -q 'lib/arm64-v8a/libnuvioz_usb_probe.so'
+          sha256sum Nuvio-Z-Installer-Windows-x64.zip Nuvio-Z-Installer-macOS.zip Nuvio-Z-Installer-Android.apk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          # Hidden markers (GitHub doesn't show HTML comments) that the installer's self-update reads, like
+          # Nuvio Z's own nuvio-ios:signing-changed: older installers may now fail with Apple.
+          marker=""
+          [ "${SIGNING_CHANGED}" = "true" ] && marker="<!-- nuviozinstaller:signing-changed -->"
+          body="${marker}
+          Nuvio Z Installer ${VERSION}: puts Nuvio Z on an iPhone, signed with your own Apple Account, from Windows, a Mac (Intel and Apple Silicon, macOS 11+) or an Android phone (USB host, arm64). Nuvio Z then keeps itself signed.
+
+          Mac: unzip, move the app to Applications, and open it. This build is not notarized; if macOS blocks it, use System Settings > Privacy & Security > Open Anyway. The zip includes instructions.
+
+          Android: open the APK and allow installs from your browser or files app when Android asks.
+
+          ${NOTES}"
+          gh release create "${tag}" --repo "${GITHUB_REPOSITORY}" --target "${SHA}" \
+            --title "Nuvio Z Installer ${VERSION}" --notes "${body}" --latest \
+            Nuvio-Z-Installer-Windows-x64.zip Nuvio-Z-Installer-macOS.zip Nuvio-Z-Installer-Android.apk SHA256SUMS.txt
+          echo "Published ${tag}."
